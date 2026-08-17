@@ -1,0 +1,187 @@
+-- Disable notices for a cleaner output, optional.
+SET client_min_messages TO WARNING;
+
+-- We'll create tables in order of dependency:
+-- 1. module_monitor (Independent)
+-- 2. api_request_results (Independent)
+-- 3. batch (Independent, parent table)
+-- 4. job (Depends on batch)
+-- 5. document (Depends on batch)
+-- 6. page (Depends on document)
+
+------------------------------------------
+-- Table: module_monitor
+-- Stores stats for different processing modules.
+------------------------------------------
+CREATE TABLE module_monitor (
+    -- BIGSERIAL is an auto-incrementing 8-byte integer, good for primary keys.
+    id BIGSERIAL PRIMARY KEY,
+    
+    -- TEXT is used, and a UNIQUE constraint ensures no two modules have the same name.
+    module_name TEXT NOT NULL UNIQUE,
+    
+    -- BIGINT for counters to prevent overflow.
+    files_processed_num BIGINT NOT NULL DEFAULT 0,
+    success_num BIGINT NOT NULL DEFAULT 0,
+    failure_num BIGINT NOT NULL DEFAULT 0,
+    
+    -- TIMESTAMPTZ (timestamp with time zone) is best practice for timestamps.
+    -- 'created_time' is not in the INSERT query, so we add a default.
+    created_time TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    
+    -- 'updated_time' is explicitly set in the UPDATE query, so no default is needed.
+    updated_time TIMESTAMPTZ 
+);
+
+-- Index for faster lookups by module_name.
+CREATE INDEX idx_module_monitor_module_name ON module_monitor(module_name);
+
+------------------------------------------
+-- Table: api_request_results
+-- Logs details for API requests.
+------------------------------------------
+CREATE TABLE api_request_results (
+    -- UUID is used as the primary key, matching the Python code (str(uuid.uuid4())).
+    request_id UUID PRIMARY KEY,
+    
+    endpoint_path TEXT,
+    
+    -- SMALLINT is sufficient for HTTP status codes (e.g., 200, 404, 500).
+    status_code SMALLINT,
+    
+    -- FLOAT8 (double precision) is appropriate for response times.
+    response_time FLOAT8,
+    
+    -- JSONB is the preferred binary format for storing JSON in PostgreSQL.
+    -- It's faster to process and can be indexed.
+    result_data JSONB,
+    
+    error_message TEXT,
+    
+    -- This column is implied by the commented-out Python code.
+    created_time TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Indexes for common query patterns.
+CREATE INDEX idx_api_request_results_created_time ON api_request_results(created_time DESC);
+CREATE INDEX idx_api_request_results_endpoint_path ON api_request_results(endpoint_path);
+
+------------------------------------------
+-- Table: batch
+-- Groups documents together, associated with a user.
+------------------------------------------
+CREATE TABLE batch (
+    id BIGSERIAL PRIMARY KEY,
+    
+    -- This should ideally be a FOREIGN KEY to a 'users' table.
+    user_id BIGINT NOT NULL,
+    
+    name TEXT NOT NULL,
+    
+    -- The app inserts NOW(), but a default is good practice.
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Index for quickly finding batches for a specific user.
+CREATE INDEX idx_batch_user_id ON batch(user_id);
+
+------------------------------------------
+-- Table: job
+-- Tracks the status of a long-running job, linked to a batch.
+------------------------------------------
+CREATE TABLE job (
+    id BIGSERIAL PRIMARY KEY,
+    
+    -- Foreign key linking this job to a specific batch.
+    batch_id BIGINT NOT NULL,
+    
+    -- Default 'processing' matches the create_job method.
+    status TEXT NOT NULL DEFAULT 'processing',
+    
+    -- Default NOW() matches the create_job method.
+    started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    
+    -- Nullable, as it's set upon completion.
+    completed_at TIMESTAMPTZ,
+    
+    -- Defines the foreign key relationship.
+    -- ON DELETE CASCADE means if a 'batch' is deleted, all its 'jobs' are also deleted.
+    CONSTRAINT fk_batch
+        FOREIGN KEY(batch_id)
+        REFERENCES batch(id)
+        ON DELETE CASCADE
+);
+
+-- Indexes for common lookups.
+CREATE INDEX idx_job_batch_id ON job(batch_id);
+CREATE INDEX idx_job_status ON job(status);
+
+------------------------------------------
+-- Table: document
+-- Stores metadata for a single file (e.g., PDF, image).
+------------------------------------------
+CREATE TABLE document (
+    id BIGSERIAL PRIMARY KEY,
+    
+    -- Foreign key linking this document to its batch.
+    batch_id BIGINT NOT NULL,
+    
+    filename TEXT NOT NULL,
+    filepath TEXT NOT NULL,
+    
+    -- BIGINT is safest for file sizes (can exceed 4GB).
+    filesize BIGINT,
+    
+    filetype TEXT,
+    document_type TEXT,
+    
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    
+    CONSTRAINT fk_batch
+        FOREIGN KEY(batch_id)
+        REFERENCES batch(id)
+        ON DELETE CASCADE
+);
+
+-- Index for quickly finding documents within a batch.
+CREATE INDEX idx_document_batch_id ON document(batch_id);
+
+-- A UNIQUE index on filepath is good practice, as the app generates unique paths.
+CREATE UNIQUE INDEX idx_document_filepath ON document(filepath);
+
+------------------------------------------
+-- Table: page
+-- Stores the content and analysis for a single page of a document.
+------------------------------------------
+CREATE TABLE page (
+    id BIGSERIAL PRIMARY KEY,
+    
+    -- Foreign key linking this page to its parent document.
+    document_id BIGINT NOT NULL,
+    
+    page_number INTEGER NOT NULL,
+    text_content TEXT,
+    analysis_results JSONB,
+    
+    -- Default 'processed' matches the create_pages methods.
+    detection_status TEXT DEFAULT 'processed',
+    
+    CONSTRAINT fk_document
+        FOREIGN KEY(document_id)
+        REFERENCES document(id)
+        ON DELETE CASCADE,
+        
+    -- Ensures that a document cannot have two pages with the same number.
+    UNIQUE(document_id, page_number)
+);
+
+-- Index for quickly finding all pages for a document.
+CREATE INDEX idx_page_document_id ON page(document_id);
+
+-- A GIN index is highly recommended for searching within JSONB data.
+CREATE INDEX idx_page_analysis_results_gin ON page USING GIN (analysis_results);
+
+---
+-- Script complete.
+---
+SELECT 'Database schema created successfully.' AS status;

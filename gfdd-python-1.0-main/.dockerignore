@@ -1,0 +1,29 @@
+# Git
+.git/
+.gitignore
+.gitlab-ci.yml
+
+# VSCode
+.vscode/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Local files and directories that should not be in the image
+chocoportable/
+ChocolateyInstallNonAdmin.ps1
+dlib-19.22.99-cp39-cp39-win_amd64.whl
+fraudDB.db
+fraud_api_logs.log
+# Model/
+Model.zipx
+newdocumentation.pdf
+poppler-24.08.0/
+Tesseract-OCR/
+test/
+static/
+*_bak.py
+*.md
